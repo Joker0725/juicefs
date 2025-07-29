@@ -1614,3 +1614,51 @@ func (n *jfsObjects) IsListenSupported() bool {
 func (n *jfsObjects) IsTaggingSupported() bool {
 	return true
 }
+
+// UpdateObjectTags merges or replaces object tags.
+func (n *jfsObjects) UpdateObjectTags(ctx context.Context, bucket, object string, newTags *tags.Tags, merge bool, opts minio.ObjectOptions) (minio.ObjectInfo, error) {
+	if !n.gConf.ObjTag {
+		return minio.ObjectInfo{}, minio.NotImplemented{}
+	}
+
+	// 当前对象路径
+	path := n.path(bucket, object)
+
+	// 获取原有 tags
+	var finalTags *tags.Tags
+	if merge {
+		existingTags, err := n.GetObjectTags(ctx, bucket, object, opts)
+		if err != nil {
+			if _, ok := err.(minio.ObjectNotFound); !ok {
+				return minio.ObjectInfo{}, err
+			}
+		}
+
+		// 合并标签（新标签覆盖旧标签的同名键）
+		if existingTags != nil {
+			merged := existingTags.ToMap()
+			for k, v := range newTags.ToMap() {
+				merged[k] = v
+			}
+			finalTags, err = tags.NewTags(merged, true)
+			if err != nil {
+				return minio.ObjectInfo{}, err
+			}
+		} else {
+			finalTags = newTags
+		}
+	} else {
+		// 直接替换
+		finalTags = newTags
+	}
+
+	// 序列化为字符串
+	tagStr := finalTags.String()
+
+	// 存储标签
+	if eno := n.fs.SetXattr(mctx, path, s3Tags, []byte(tagStr), 0); eno != 0 {
+		return minio.ObjectInfo{}, eno
+	}
+
+	return n.GetObjectInfo(ctx, bucket, object, opts)
+}
